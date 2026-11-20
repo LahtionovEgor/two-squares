@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<!-- Экран телефона: на весь экран (с вырезом), без масштабирования пальцами -->
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#EAE3D5">
+<meta name="format-detection" content="telephone=no">
+<title>Про 2 квадрата — игра</title>
+
+<!-- Связь с Telegram. По правилам Telegram этот скрипт подключается первым. -->
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+
+<!-- Шрифты лежат в репозитории: грузятся быстро и без чужих серверов -->
+<link rel="preload" href="fonts/dejavu-sans-bold.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/manrope-cyrillic.woff2" as="font" type="font/woff2" crossorigin>
+
+<style>
+/* ===== Шрифты ===== */
+/* Заголовки и титры — как в ролике: жирный гротеск DejaVu Sans Bold */
+@font-face {
+  font-family: "Titul";
+  src: url("fonts/dejavu-sans-bold.woff2") format("woff2");
+  font-weight: 700;
+  font-display: swap;
+}
+/* Мелкий текст — Manrope: русские и латинские буквы в разных файлах */
+@font-face {
+  font-family: "Manrope";
+  src: url("fonts/manrope-cyrillic.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+  unicode-range: U+0301, U+0400-045F, U+0490-0491, U+04B0-04B1, U+2116;
+}
+@font-face {
+  font-family: "Manrope";
+  src: url("fonts/manrope-latin.woff2") format("woff2");
+  font-weight: 200 800;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* ===== Цвета из ролика «Про 2 квадрата. Глава вторая» (замер по кадрам) ===== */
+:root {
+  --paper: #EAE3D5;  /* бумага */
+  --ink: #171513;    /* чёрный */
+  --red: #D2241B;    /* красный */
+  --wine: #77151D;   /* тёмно-красный */
+  --yellow: #F3BE0F; /* жёлтый: заливка */
+  --ochre: #BE8700;  /* жёлтый: текст */
+  --blue: #2354C9;   /* синий */
+  --orange: #ED6E16; /* оранжевый */
+  --violet: #47255E; /* фиолетовый */
+  --gray: #4E473F;   /* серый текст */
+  --light: #FBFAF3;  /* светлый: реплики, кнопки */
+
+  /* Отступы от краёв. В Telegram их пересчитывает скрипт ниже:
+     сверху — вырез телефона и кнопки Telegram в полноэкранном режиме. */
+  --top: calc(env(safe-area-inset-top, 0px) + 16px);
+  --bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  --side: clamp(20px, 6vw, 48px);
+}
+
+/* ===== Основа страницы ===== */
+html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; }
+body {
+  position: fixed; inset: 0;
+  background-color: var(--paper); /* зерно бумаги добавляет game.js */
+  color: var(--ink);
+  font-family: "Manrope", system-ui, sans-serif;
+  -webkit-user-select: none; user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+  overscroll-behavior: none;
+  touch-action: none; /* никаких прокруток и масштабов пальцами */
+}
+#scene { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+
+/* Экран — слой поверх холста. Виден только активный. */
+.screen {
+  position: absolute; inset: 0; box-sizing: border-box;
+  padding: var(--top) var(--side) var(--bottom);
+  display: none; flex-direction: column;
+  pointer-events: none; /* касания проходят к холсту… */
+}
+.screen.active { display: flex; }
+.screen button, .screen a { pointer-events: auto; } /* …кроме кнопок и ссылок */
+.stage { flex: 1; } /* пустое место: тут холст рисует сцену */
+#menuStage { min-height: 120px; } /* в меню здесь прыгают квадраты */
+
+/* ===== Титул, как первый кадр ролика ===== */
+.logo {
+  margin: 0; display: flex; align-items: center;
+  font: 700 clamp(54px, 17vw, 120px)/1 "Titul", sans-serif;
+  letter-spacing: -0.01em;
+}
+.logo-squares { position: relative; width: 1em; height: 0.86em; margin-left: 0.28em; }
+.logo-squares i { position: absolute; width: 0.74em; height: 0.74em; }
+.logo-squares .black { left: 0.2em; top: 0.11em; background: var(--ink); transform: rotate(10deg); }
+.logo-squares .red { left: 0; top: 0; background: var(--red); transform: rotate(-5deg); }
+.logo-sub { margin-top: 0.3em; font: 700 clamp(26px, 7.6vw, 54px)/1 "Titul", sans-serif; color: var(--red); }
+.small { margin: 0.8em 0 0; font-size: clamp(13px, 3.6vw, 17px); font-weight: 600; line-height: 1.35; max-width: 34em; }
+.small a { color: var(--red); }
+
+/* ===== Титр сцены, как в ролике: капс слева сверху, главное слово — цветом ===== */
+.cap-title { margin: 0; font: 700 clamp(19px, 5.6vw, 32px)/1.15 "Titul", sans-serif; }
+.cap-title em { font-style: normal; color: var(--red); }
+.cap-sub { margin: 0.45em 0 0; font-size: clamp(13px, 3.6vw, 17px); font-weight: 700; color: var(--red); }
+
+/* ===== Кнопки: прямые углы, плоская заливка ===== */
+.buttons { width: 100%; max-width: 420px; padding-top: 34px; } /* отступ — место под землёй */
+.btn {
+  display: block; width: 100%; box-sizing: border-box;
+  border: 0; border-radius: 0; margin: 0; cursor: pointer;
+  font: 700 21px/1 "Titul", sans-serif; letter-spacing: 0.03em; text-transform: uppercase;
+  padding: 19px 20px;
+}
+.btn-red { background: var(--red); color: var(--light); }
+.btn-red:active { background: var(--ink); }
+/* Кнопка-реплика: светлый прямоугольник в тонкой чёрной рамке, как пузырь в ролике */
+.btn-note { background: var(--light); color: var(--ink); border: 2px solid var(--ink); font-size: 15px; padding: 13px 16px; }
+.btn-note:active { background: var(--ink); color: var(--light); }
+.btn + .btn { margin-top: 12px; }
+.row { display: flex; gap: 12px; }
+.row .btn + .btn { margin-top: 0; }
+[hidden] { display: none !important; }
+
+/* ===== Экран «Проверка» ===== */
+.checks { list-style: none; margin: 20px 0 0; padding: 0; font-size: 15px; }
+.checks li { display: flex; align-items: baseline; gap: 10px; padding: 7px 0; border-bottom: 2px solid #D6CDBC; }
+.checks .mark { flex: none; width: 11px; height: 11px; background: var(--ink); }
+.checks .mark.no { background: var(--red); }
+.checks b { flex: none; font-weight: 700; }
+.checks span.val { margin-left: auto; text-align: right; font-weight: 600; color: var(--gray); }
+.build { margin-top: 14px; font-size: 13px; font-weight: 600; color: var(--gray); }
+</style>
+</head>
+<body>
+
+<!-- Холст: всё, что движется, рисует game.js -->
+<canvas id="scene"></canvas>
+
+<!-- ===== Меню ===== -->
+<section id="menu" class="screen active">
+  <h1 class="logo">ПРО&nbsp;2<span class="logo-squares" aria-label="квадрата"><i class="black"></i><i class="red"></i></span></h1>
+  <div class="logo-sub">ИГРА</div>
+  <p class="small">по «Супрематическому сказу про&nbsp;2&nbsp;квадрата» Эля Лисицкого</p>
+  <div class="stage" id="menuStage"></div> <!-- низ этого места = линия земли -->
+  <div class="buttons">
+    <button class="btn btn-red" id="btnPlay">Играть</button>
+    <button class="btn btn-note" id="btnCheck">Проверка Telegram</button>
+    <p class="small" id="browserNote" hidden>Открыто в браузере. Играть в Telegram: <a href="https://t.me/two_squares_bot">@two_squares_bot</a></p>
+  </div>
+</section>
+
+<!-- ===== Мир (пока пустой) ===== -->
+<section id="world" class="screen">
+  <h2 class="cap-title">ЦЕНТР — <em>БЕЛОЕ</em></h2>
+  <p class="cap-sub">каркас игры: движение и точки появятся на следующем этапе</p>
+  <div class="stage"></div>
+  <div class="buttons"><button class="btn btn-note back" hidden>← Меню</button></div>
+</section>
+
+<!-- ===== Проверка: что работает в Telegram на этом телефоне ===== -->
+<section id="check" class="screen">
+  <h2 class="cap-title">ПРОВЕРКА <em>TELEGRAM</em></h2>
+  <p class="cap-sub">что работает на этом телефоне</p>
+  <ul class="checks" id="checkList"></ul>
+  <p class="build" id="build"></p>
+  <div class="stage"></div>
+  <div class="buttons">
+    <div class="row">
+      <button class="btn btn-note" id="btnVibro">Вибрация</button>
+      <button class="btn btn-note" id="btnSound">Звук</button>
+    </div>
+    <p class="small">Нет звука — проверь, не включён ли беззвучный режим.</p>
+    <button class="btn btn-note back" hidden>← Меню</button>
+  </div>
+</section>
+
+<!-- Карта и движок. При изменении файла увеличивайте номер ?v= -->
+<script src="world.js?v=1"></script>
+<script src="game.js?v=1"></script>
+
+<script>
+'use strict';
+// Сборка: увеличиваем при каждой выкладке — видно на экране «Проверка»,
+// так легко понять, что Telegram уже показывает новую версию.
+const BUILD = '1 · 20.11.2026';
+
+// ===================== Telegram =====================
+const tg = window.Telegram && window.Telegram.WebApp;
+// Внутри Telegram есть данные запуска; в обычном браузере их нет
+const inTelegram = !!(tg && tg.initData);
+const tgAtLeast = (v) => inTelegram && tg.isVersionAtLeast(v);
+let fullscreenError = '';
+
+function setupTelegram() {
+  if (!inTelegram) {
+    document.getElementById('browserNote').hidden = false;
+    document.querySelectorAll('.back').forEach((b) => (b.hidden = false));
+    return;
+  }
+  tg.ready();  // Telegram убирает заставку загрузки
+  tg.expand(); // на всю высоту
+  // Цвет шапки и фона Telegram — под бумагу
+  try { tg.setHeaderColor('#EAE3D5'); tg.setBackgroundColor('#EAE3D5'); } catch (e) {}
+  if (tgAtLeast('7.10')) try { tg.setBottomBarColor('#EAE3D5'); } catch (e) {}
+  // Запрет свайпа вниз: случайно не закроем игру пальцем
+  if (tgAtLeast('7.7')) tg.disableVerticalSwipes();
+  // Полный экран и запрет поворота — только на телефонах и планшетах
+  const mobile = ['ios', 'android', 'android_x'].includes(tg.platform);
+  if (mobile && tgAtLeast('8.0')) {
+    tg.onEvent('fullscreenFailed', (e) => { fullscreenError = (e && e.error) || 'ошибка'; });
+    tg.requestFullscreen();
+    tg.lockOrientation();
+  }
+  // Кнопка «Назад» Telegram ведёт в меню
+  tg.BackButton.onClick(() => { haptic('light'); showScreen('menu'); });
+  // Отступы меняются при входе в полный экран и повороте
+  ['fullscreenChanged', 'safeAreaChanged', 'contentSafeAreaChanged', 'viewportChanged']
+    .forEach((ev) => tg.onEvent(ev, layout));
+  // Свернули Mini App — пауза, вернулись — продолжаем
+  if (tgAtLeast('8.0')) {
+    tg.onEvent('deactivated', () => Game.pause());
+    tg.onEvent('activated', () => Game.resume());
+  }
+}
+
+// Отступы сверху и снизу: вырез телефона + кнопки Telegram
+function layout() {
+  if (inTelegram && tgAtLeast('8.0')) {
+    const safe = tg.safeAreaInset || {};
+    const content = tg.contentSafeAreaInset || {};
+    const top = (safe.top || 0) + (content.top || 0);
+    const bottom = (safe.bottom || 0) + (content.bottom || 0);
+    document.documentElement.style.setProperty('--top', (top + 16) + 'px');
+    document.documentElement.style.setProperty('--bottom', (bottom + 16) + 'px');
+  }
+  Game.resize();
+  // Линия земли в меню проходит по низу пустого места над кнопками.
+  // Меряем, только когда меню на экране (у скрытого меню размеры нулевые).
+  const stage = document.getElementById('menuStage').getBoundingClientRect();
+  if (stage.bottom > 0) Game.groundY = stage.bottom;
+}
+
+// Вибрация (только в Telegram). kind: light, medium, heavy, success, error
+function haptic(kind) {
+  if (!tgAtLeast('6.1')) return;
+  if (kind === 'success' || kind === 'error' || kind === 'warning') {
+    tg.HapticFeedback.notificationOccurred(kind);
+  } else {
+    tg.HapticFeedback.impactOccurred(kind);
+  }
+}
+
+// ===================== Сохранение =====================
+// Главное хранилище — облако Telegram (CloudStorage), запасное — память браузера.
+const Store = {
+  cloud: tgAtLeast('6.9'),
+  get(key) {
+    return new Promise((resolve) => {
+      if (!this.cloud) return resolve(localGet(key));
+      tg.CloudStorage.getItem(key, (err, value) => resolve(err ? localGet(key) : value));
+    });
+  },
+  set(key, value) {
+    localSet(key, value); // копия в памяти телефона — на всякий случай
+    return new Promise((resolve) => {
+      if (!this.cloud) return resolve(false);
+      tg.CloudStorage.setItem(key, value, (err, ok) => resolve(!err && ok));
+    });
+  },
+};
+function localGet(key) { try { return localStorage.getItem(key); } catch (e) { return null; } }
+function localSet(key, value) { try { localStorage.setItem(key, value); } catch (e) {} }
+
+// ===================== Звук =====================
+// Короткий «бип», как в ролике: звук синтезируется кодом, без файлов.
+// Браузер разрешает звук только после касания — поэтому по кнопке.
+let audio = null;
+function blip() {
+  const Ctx = window.AudioContext || window.webkitAudioContext;
+  if (!Ctx) return;
+  audio = audio || new Ctx();
+  if (audio.state === 'suspended') audio.resume();
+  const t = audio.currentTime;
+  [660, 990].forEach((freq, i) => {
+    const osc = audio.createOscillator();
+    const gain = audio.createGain();
+    const start = t + i * 0.09;
+    osc.type = 'square';
+    osc.frequency.value = freq;
+    gain.gain.setValueAtTime(0.0001, start);
+    gain.gain.exponentialRampToValueAtTime(0.12, start + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.08);
+    osc.connect(gain).connect(audio.destination);
+    osc.start(start);
+    osc.stop(start + 0.09);
+  });
+}
+
+// ===================== Экраны =====================
+let current = 'menu';
+function showScreen(name) {
+  current = name;
+  document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === name));
+  Game.setScene(name);
+  layout(); // пересчитать землю, если вернулись в меню
+  if (inTelegram) name === 'menu' ? tg.BackButton.hide() : tg.BackButton.show();
+  if (name === 'check') runChecks();
+}
+
+document.getElementById('btnPlay').addEventListener('click', () => { haptic('medium'); showScreen('world'); });
+document.getElementById('btnCheck').addEventListener('click', () => { haptic('light'); showScreen('check'); });
+document.querySelectorAll('.back').forEach((b) => b.addEventListener('click', () => showScreen('menu')));
+document.getElementById('btnVibro').addEventListener('click', () => {
+  haptic('heavy');
+  setTimeout(() => haptic('success'), 250);
+});
+document.getElementById('btnSound').addEventListener('click', () => { haptic('light'); blip(); });
+// Чтобы на iPhone кнопки темнели при нажатии
+document.addEventListener('touchstart', () => {}, { passive: true });
+
+// ===================== Проверка =====================
+async function runChecks() {
+  const rows = [];
+  const yes = (ok, text) => ({ ok, text });
+  rows.push(['Telegram', inTelegram
+    ? yes(true, tg.platform + ', API ' + tg.version)
+    : yes(false, 'нет, обычный браузер')]);
+  rows.push(['Полный экран', inTelegram && tg.isFullscreen
+    ? yes(true, 'да')
+    : yes(false, fullscreenError ? 'нет: ' + fullscreenError : 'нет')]);
+  rows.push(['Поворот', inTelegram && tg.isOrientationLocked ? yes(true, 'заблокирован') : yes(false, 'не заблокирован')]);
+  rows.push(['Свайп вниз', inTelegram && tg.isVerticalSwipesEnabled === false ? yes(true, 'отключён') : yes(false, 'включён')]);
+  rows.push(['Облако', yes(false, 'проверяю…')]);
+  rows.push(['Кадров/с', yes(true, '…')]);
+  rows.push(['Экран', yes(true, Game.w + '×' + Game.h + ', плотность ' + (window.devicePixelRatio || 1) + ' → ' + Game.dpr)]);
+  drawChecks(rows);
+
+  // Облако: записываем метку времени и читаем обратно
+  const stamp = String(Date.now());
+  const saved = await Store.set('check', stamp);
+  const read = await Store.get('check');
+  rows[4][1] = saved && read === stamp
+    ? yes(true, 'сохраняет и читает')
+    : yes(false, 'нет — пишем в память телефона');
+  drawChecks(rows);
+}
+
+function drawChecks(rows) {
+  const list = document.getElementById('checkList');
+  list.textContent = '';
+  rows.forEach(([name, r]) => {
+    const li = document.createElement('li');
+    const mark = document.createElement('i');
+    mark.className = 'mark' + (r.ok ? '' : ' no');
+    const b = document.createElement('b');
+    b.textContent = name;
+    const val = document.createElement('span');
+    val.className = 'val';
+    val.textContent = r.text;
+    li.append(mark, b, val);
+    list.append(li);
+  });
+  document.getElementById('build').textContent = 'Сборка ' + BUILD;
+}
+
+// Кадры в секунду на экране «Проверка» обновляются дважды в секунду
+setInterval(() => {
+  if (current !== 'check') return;
+  const row = document.querySelectorAll('#checkList li')[5];
+  if (!row) return;
+  const fps = Math.round(Game.fps);
+  row.querySelector('.val').textContent = fps;
+  row.querySelector('.mark').className = 'mark' + (fps >= 55 ? '' : ' no');
+}, 500);
+
+// ===================== Пауза при сворачивании =====================
+document.addEventListener('visibilitychange', () => (document.hidden ? Game.pause() : Game.resume()));
+
+// ===================== Старт =====================
+Game.init(document.getElementById('scene'));
+setupTelegram();
+layout();
+window.addEventListener('resize', layout);
+// Когда шрифты догрузятся, высота титула может чуть измениться — пересчитаем землю
+if (document.fonts && document.fonts.ready) document.fonts.ready.then(layout);
+</script>
+</body>
+</html>
