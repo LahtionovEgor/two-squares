@@ -44,7 +44,8 @@
 :root {
   --paper: #EAE3D5;  /* бумага */
   --ink: #171513;    /* чёрный */
-  --red: #D2241B;    /* красный */
+  --red: #D2241B;    /* красный: заливка */
+  --red-text: #BE1E16; /* красный: мелкий текст (контрастнее на бумаге) */
   --wine: #77151D;   /* тёмно-красный */
   --yellow: #F3BE0F; /* жёлтый: заливка */
   --ochre: #BE8700;  /* жёлтый: текст */
@@ -101,12 +102,12 @@ body {
 .logo-squares .red { left: 0; top: 0; background: var(--red); transform: rotate(-5deg); }
 .logo-sub { margin-top: 0.3em; font: 700 clamp(26px, 7.6vw, 54px)/1 "Titul", sans-serif; color: var(--red); }
 .small { margin: 0.8em 0 0; font-size: clamp(13px, 3.6vw, 17px); font-weight: 600; line-height: 1.35; max-width: 34em; }
-.small a { color: var(--red); }
+.small a { color: var(--red-text); }
 
 /* ===== Титр сцены, как в ролике: капс слева сверху, главное слово — цветом ===== */
 .cap-title { margin: 0; font: 700 clamp(19px, 5.6vw, 32px)/1.15 "Titul", sans-serif; }
 .cap-title em { font-style: normal; color: var(--red); }
-.cap-sub { margin: 0.45em 0 0; font-size: clamp(13px, 3.6vw, 17px); font-weight: 700; color: var(--red); }
+.cap-sub { margin: 0.45em 0 0; font-size: clamp(13px, 3.6vw, 17px); font-weight: 700; color: var(--red-text); }
 
 /* ===== Кнопки: прямые углы, плоская заливка ===== */
 .buttons { width: 100%; max-width: 420px; padding-top: 34px; } /* отступ — место под землёй */
@@ -125,6 +126,39 @@ body {
 .row { display: flex; gap: 12px; }
 .row .btn + .btn { margin-top: 0; }
 [hidden] { display: none !important; }
+
+/* ===== Табло в игре (вариант Б): чёрная полоса сверху ===== */
+/* Стоит сразу под кнопками Telegram: --top минус наш отступ 16px */
+.hud {
+  position: absolute; left: 0; right: 0; top: calc(var(--top) - 16px);
+  height: 56px; box-sizing: border-box; padding: 0 8px 0 14px;
+  display: flex; align-items: center; gap: 12px;
+  background: var(--ink); color: var(--paper);
+  font: 700 18px/1 "Titul", sans-serif;
+}
+.hud-num { flex: none; width: 34px; height: 34px; display: flex; align-items: center; justify-content: center; background: var(--red); color: var(--light); }
+.hud-name { flex: 1; min-width: 0; letter-spacing: 0.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.hud-energy { flex: none; display: flex; align-items: center; gap: 6px; font-size: 15px; }
+.hud-energy i { width: 11px; height: 11px; border-radius: 50%; background: #5B82E0; }
+.hud-lives { flex: none; display: flex; gap: 4px; }
+.hud-lives i { width: 10px; height: 10px; background: var(--red); }
+.hud-pause {
+  flex: none; width: 44px; height: 44px; padding: 0; box-sizing: border-box; cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 6px;
+  background: var(--ink); border: 2px solid var(--paper); border-radius: 0;
+}
+.hud-pause i { width: 5px; height: 16px; background: var(--paper); }
+.hud-pause:active { background: var(--red); }
+.hud-line { position: absolute; left: 0; right: 0; top: calc(var(--top) + 40px); height: 4px; background: var(--red); }
+.hud-hint { position: absolute; left: 16px; right: 16px; top: calc(var(--top) + 54px); margin: 0; font-size: 13px; font-weight: 700; line-height: 1.35; color: var(--red-text); }
+
+/* ===== Пауза: реплика в рамке посреди экрана ===== */
+.pause {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  padding: 0 var(--side); pointer-events: auto;
+}
+.pause-box { width: 100%; max-width: 360px; box-sizing: border-box; padding: 22px 20px 20px; background: var(--light); border: 2px solid var(--ink); }
+.pause-box .cap-title { margin-bottom: 18px; }
 
 /* ===== Экран «Проверка» ===== */
 .checks { list-style: none; margin: 20px 0 0; padding: 0; font-size: 15px; }
@@ -154,12 +188,25 @@ body {
   </div>
 </section>
 
-<!-- ===== Мир (пока пустой) ===== -->
+<!-- ===== Мир: табло сверху, всё остальное рисует холст ===== -->
 <section id="world" class="screen">
-  <h2 class="cap-title">ЦЕНТР — <em>БЕЛОЕ</em></h2>
-  <p class="cap-sub">каркас игры: движение и точки появятся на следующем этапе</p>
-  <div class="stage"></div>
-  <div class="buttons"><button class="btn btn-note back" hidden>← Меню</button></div>
+  <div class="hud">
+    <span class="hud-num">0</span>
+    <span class="hud-name">БЕЛОЕ</span>
+    <span class="hud-energy"><i></i><span id="hudEnergy">0 / 100</span></span>
+    <span class="hud-lives" id="hudLives" aria-label="3 жизни"></span>
+    <button class="hud-pause" id="btnPause" aria-label="Пауза"><i></i><i></i></button>
+  </div>
+  <div class="hud-line"></div>
+  <p class="hud-hint" id="hudHint"></p>
+  <!-- Пауза -->
+  <div class="pause" id="pause" hidden>
+    <div class="pause-box">
+      <h2 class="cap-title"><em>ПАУЗА</em></h2>
+      <button class="btn btn-red" id="btnResume">Продолжить</button>
+      <button class="btn btn-note" id="btnToMenu">В меню</button>
+    </div>
+  </div>
 </section>
 
 <!-- ===== Проверка: что работает в Telegram на этом телефоне ===== -->
@@ -180,14 +227,14 @@ body {
 </section>
 
 <!-- Карта и движок. При изменении файла увеличивайте номер ?v= -->
-<script src="world.js?v=1"></script>
-<script src="game.js?v=1"></script>
+<script src="world.js?v=2"></script>
+<script src="game.js?v=2"></script>
 
 <script>
 'use strict';
 // Сборка: увеличиваем при каждой выкладке — видно на экране «Проверка»,
 // так легко понять, что Telegram уже показывает новую версию.
-const BUILD = '1 · 20.11.2026';
+const BUILD = '2 · 20.11.2026';
 
 // ===================== Telegram =====================
 const tg = window.Telegram && window.Telegram.WebApp;
@@ -223,7 +270,7 @@ function setupTelegram() {
     .forEach((ev) => tg.onEvent(ev, layout));
   // Свернули Mini App — пауза, вернулись — продолжаем
   if (tgAtLeast('8.0')) {
-    tg.onEvent('deactivated', () => Game.pause());
+    tg.onEvent('deactivated', () => { pauseGame(); Game.pause(); });
     tg.onEvent('activated', () => Game.resume());
   }
 }
@@ -305,6 +352,8 @@ function blip() {
 let current = 'menu';
 function showScreen(name) {
   current = name;
+  document.getElementById('pause').hidden = true;
+  Game.setPaused(false);
   document.querySelectorAll('.screen').forEach((s) => s.classList.toggle('active', s.id === name));
   Game.setScene(name);
   layout(); // пересчитать землю, если вернулись в меню
@@ -312,7 +361,18 @@ function showScreen(name) {
   if (name === 'check') runChecks();
 }
 
-document.getElementById('btnPlay').addEventListener('click', () => { haptic('medium'); showScreen('world'); });
+document.getElementById('btnPlay').addEventListener('click', () => {
+  haptic('medium');
+  Game.startRun('red'); // новый заход; выбор квадрата — на этапе 6
+  showScreen('world');
+});
+document.getElementById('btnPause').addEventListener('click', () => { haptic('light'); pauseGame(); });
+document.getElementById('btnResume').addEventListener('click', () => {
+  haptic('light');
+  document.getElementById('pause').hidden = true;
+  Game.setPaused(false);
+});
+document.getElementById('btnToMenu').addEventListener('click', () => { haptic('light'); showScreen('menu'); });
 document.getElementById('btnCheck').addEventListener('click', () => { haptic('light'); showScreen('check'); });
 document.querySelectorAll('.back').forEach((b) => b.addEventListener('click', () => showScreen('menu')));
 document.getElementById('btnVibro').addEventListener('click', () => {
@@ -322,6 +382,31 @@ document.getElementById('btnVibro').addEventListener('click', () => {
 document.getElementById('btnSound').addEventListener('click', () => { haptic('light'); blip(); });
 // Чтобы на iPhone кнопки темнели при нажатии
 document.addEventListener('touchstart', () => {}, { passive: true });
+
+// ===================== Табло и пауза =====================
+// Пауза: мир замирает, поверх — реплика «Пауза». Только во время игры.
+function pauseGame() {
+  if (current !== 'world') return;
+  Game.setPaused(true);
+  document.getElementById('pause').hidden = false;
+}
+
+// Обновить табло. Game вызывает это, только когда что-то поменялось.
+Game.onChange = (st) => {
+  document.getElementById('hudEnergy').textContent = st.energy + ' / 100';
+  const lives = document.getElementById('hudLives');
+  const n = Math.min(st.lives, 9); // больше 9 квадратиков не влезет
+  if (lives.children.length !== n) {
+    lives.textContent = '';
+    for (let i = 0; i < n; i++) lives.append(document.createElement('i'));
+    lives.setAttribute('aria-label', st.lives + ' жизни');
+  }
+  const all = World.dots.length;
+  document.getElementById('hudHint').textContent = st.taken < all
+    ? 'палец — руль · быстрый смах — рывок · собрано ' + st.taken + ' из ' + all
+    : 'вся энергия собрана!';
+};
+Game.onFeel = (kind) => haptic(kind);
 
 // ===================== Проверка =====================
 async function runChecks() {
@@ -379,7 +464,9 @@ setInterval(() => {
 }, 500);
 
 // ===================== Пауза при сворачивании =====================
-document.addEventListener('visibilitychange', () => (document.hidden ? Game.pause() : Game.resume()));
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) { pauseGame(); Game.pause(); } else Game.resume();
+});
 
 // ===================== Старт =====================
 Game.init(document.getElementById('scene'));

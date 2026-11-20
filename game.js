@@ -1,8 +1,8 @@
 // game.js — движок «Двух квадратов»: холст, цикл кадров, рисование сцен.
 //
 // Подключается из index.html как game.js?v=N (при изменении файла N растёт).
-// Сейчас это каркас (этап 3): меню с живыми квадратами и пустой мир.
-// Движение, камера, столкновения и точки — этап 4.
+// Этап 4 «Ядро»: герой едет за пальцем (плавающий джойстик), смах — рывок,
+// камера следует за героем, препятствия не пускают, точки собираются.
 
 'use strict';
 
@@ -20,6 +20,24 @@ const COLORS = {
   light: '#FBFAF3',  // светлый
 };
 
+// Два героя (spec.md, раздел 5). speed — клеток в секунду.
+// grip — «сцепление»: чем больше, тем быстрее квадрат разгоняется и тормозит.
+// Красный лёгкий (откликается сразу), чёрный тяжёлый (катится с инерцией).
+const HEROES = {
+  red:   { color: COLORS.red, speed: 5, grip: 14 },
+  black: { color: COLORS.ink, speed: 4, grip: 6 },
+};
+
+// Управление (spec.md, раздел 6). Все числа можно подкручивать здесь.
+const CONTROL = {
+  stickMax: 40,      // на сколько точек отвести палец для полной скорости
+  dashCells: 3,      // рывок — на 3 клетки
+  dashSpeed: 16,     // скорость рывка, клеток в секунду (3 клетки ≈ 0,19 с)
+  dashCooldown: 1.5, // перезарядка рывка, секунды
+  flickTime: 220,    // смах: палец оторван быстрее чем за 0,22 с…
+  flickDist: 28,     // …и прошёл больше 28 точек
+};
+
 const Game = {
   canvas: null,
   ctx: null,
@@ -32,6 +50,15 @@ const Game = {
   running: false,   // крутится ли цикл кадров
   lastStamp: 0,     // время прошлого кадра (для расчёта шага)
 
+  // --- Игра (сцена 'world') ---
+  paused: false,    // пауза: мир стоит, но рисуется
+  hero: null,       // герой: где он, скорость, рывок
+  cam: { x: 0, y: 0 }, // камера: какая точка мира в центре экрана
+  stick: { active: false, id: 0, ox: 0, oy: 0, x: 0, y: 0, t0: 0 }, // палец-джойстик
+  stats: { energy: 0, lives: 3, taken: 0 }, // энергия до 100, жизни, всего собрано
+  onChange: null,   // index.html: обновить табло
+  onFeel: null,     // index.html: вибрация ('light', 'success' …)
+
   // Запуск: находим холст, подгоняем размер, делаем бумагу, крутим кадры
   init(canvas) {
     this.canvas = canvas;
@@ -39,6 +66,7 @@ const Game = {
     this.resize();
     this.makePaper();
     window.addEventListener('resize', () => this.resize());
+    this.listenTouches();
     this.resume();
   },
 
@@ -101,6 +129,8 @@ const Game = {
     // Плавный замер кадров в секунду (для экрана «Проверка»)
     if (dt > 0) this.fps += (1 / dt - this.fps) * 0.05;
 
+    if (this.scene === 'world' && !this.paused) this.update(dt);
+
     const ctx = this.ctx;
     ctx.clearRect(0, 0, this.w, this.h); // холст прозрачный, под ним бумага
     if (this.scene === 'menu') this.drawMenu(ctx);
@@ -137,15 +167,210 @@ const Game = {
     drawSquare(ctx, w * 0.5 + s * 0.62, g - s / 2 + red.y, s, COLORS.red, red.a);
   },
 
-  // ---------- Сцена мира: пустой центр и красный квадрат ----------
-  drawWorld(ctx) {
+  // ================= Сцена мира =================
+
+  // Новый заход: собрать мир, поставить героя на старт, обнулить счёт.
+  // kind — 'red' или 'black' (выбор квадрата появится в меню на этапе 6).
+  startRun(kind) {
+    World.build();
     const c = World.CELL;
-    // Камера смотрит в центр мира (этап 4 — камера будет следовать за героем)
-    const cam = { x: World.SIZE / 2 * c, y: World.SIZE / 2 * c };
-    World.draw(ctx, cam, this.w, this.h);
-    // Герой стоит в центре и чуть покачивается — «живой»
-    const a = Math.sin(this.time * 2.1) * 0.05;
-    drawSquare(ctx, this.w / 2, this.h / 2, c * 0.8, COLORS.red, a);
+    this.hero = {
+      kind: kind || 'red',
+      x: World.START.x * c, y: World.START.y * c, // центр героя в точках мира
+      vx: 0, vy: 0,          // скорость, точек в секунду
+      half: c * 0.4,         // полсторона: квадрат 32 × 32 точки
+      dash: 0,               // сколько точек рывка осталось проехать
+      dx: 0, dy: 0,          // направление рывка
+      cooldown: 0,           // сколько секунд до следующего рывка
+    };
+    this.cam.x = this.hero.x;
+    this.cam.y = this.hero.y;
+    this.stats = { energy: 0, lives: 3, taken: 0 };
+    this.stick.active = false;
+    this.paused = false;
+    this.changed();
+  },
+
+  setPaused(on) {
+    this.paused = on;
+    this.stick.active = false; // палец «отпускаем», чтобы после паузы не ехать само
+  },
+
+  changed() { if (this.onChange) this.onChange(this.stats); },
+  feel(kind) { if (this.onFeel) this.onFeel(kind); },
+
+  // ---------- Пальцы ----------
+  // Плавающий джойстик: где коснулся — там центр, куда ведёшь — туда едешь.
+  // Быстрый смах с отрывом пальца — рывок. Слушаем только первый палец.
+  listenTouches() {
+    const cv = this.canvas;
+    const s = this.stick;
+    const playing = () => this.scene === 'world' && !this.paused && this.hero;
+
+    cv.addEventListener('pointerdown', (e) => {
+      if (!playing() || s.active) return;
+      s.active = true;
+      s.id = e.pointerId;
+      s.ox = s.x = e.clientX;
+      s.oy = s.y = e.clientY;
+      s.t0 = performance.now();
+      try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+    });
+    cv.addEventListener('pointermove', (e) => {
+      if (!s.active || e.pointerId !== s.id) return;
+      s.x = e.clientX;
+      s.y = e.clientY;
+    });
+    const up = (e) => {
+      if (!s.active || e.pointerId !== s.id) return;
+      s.active = false;
+      // Смах: быстро и далеко → рывок в сторону смаха
+      const dx = e.clientX - s.ox, dy = e.clientY - s.oy;
+      const len = Math.hypot(dx, dy);
+      const quick = performance.now() - s.t0 < CONTROL.flickTime;
+      if (playing() && e.type === 'pointerup' && quick && len > CONTROL.flickDist) this.dash(dx / len, dy / len);
+    };
+    cv.addEventListener('pointerup', up);
+    cv.addEventListener('pointercancel', up);
+  },
+
+  // Рывок на 3 клетки (если перезарядка прошла)
+  dash(dx, dy) {
+    const h = this.hero;
+    if (h.cooldown > 0) return;
+    h.dash = CONTROL.dashCells * World.CELL;
+    h.dx = dx;
+    h.dy = dy;
+    h.cooldown = CONTROL.dashCooldown;
+    this.feel('light');
+  },
+
+  // ---------- Шаг игры: движение, столкновения, точки, камера ----------
+  update(dt) {
+    const h = this.hero;
+    if (!h) return;
+    const c = World.CELL;
+    const p = HEROES[h.kind];
+    const s = this.stick;
+    h.cooldown = Math.max(0, h.cooldown - dt);
+
+    // 1. Куда хочет ехать игрок: направление пальца, сила — насколько отвёл
+    let tx = 0, ty = 0;
+    if (s.active) {
+      const dx = s.x - s.ox, dy = s.y - s.oy;
+      const len = Math.hypot(dx, dy);
+      if (len > 4) { // мёртвая зона 4 точки: дрожь пальца не двигает квадрат
+        const k = Math.min(len / CONTROL.stickMax, 1) * p.speed * c;
+        tx = dx / len * k;
+        ty = dy / len * k;
+      }
+    }
+    // 2. Плавно подводим скорость к желаемой (инерция зависит от героя)
+    const a = 1 - Math.exp(-p.grip * dt);
+    h.vx += (tx - h.vx) * a;
+    h.vy += (ty - h.vy) * a;
+
+    // 3. Сдвиг за кадр: обычное движение + рывок
+    let mx = h.vx * dt, my = h.vy * dt;
+    if (h.dash > 0) {
+      const step = Math.min(h.dash, CONTROL.dashSpeed * c * dt);
+      mx += h.dx * step;
+      my += h.dy * step;
+      h.dash -= step;
+    }
+    this.moveHero(mx, my);
+
+    // 4. Собираем точки, которых коснулся квадрат
+    const reach = h.half + 6;
+    for (const d of World.dots) {
+      if (d.taken) continue;
+      if (Math.abs(d.x - h.x) < reach && Math.abs(d.y - h.y) < reach) {
+        d.taken = true;
+        d.takenAt = this.time;
+        this.stats.taken++;
+        this.stats.energy++;
+        if (this.stats.energy >= 100) { // 100 энергии = +1 жизнь
+          this.stats.energy -= 100;
+          this.stats.lives++;
+          this.feel('success');
+        }
+        this.changed();
+      }
+    }
+
+    // 5. Камера плавно догоняет героя и не заглядывает за край мира
+    const f = 1 - Math.exp(-8 * dt);
+    this.cam.x += (h.x - this.cam.x) * f;
+    this.cam.y += (h.y - this.cam.y) * f;
+    const max = World.SIZE * c;
+    this.cam.x = Math.min(Math.max(this.cam.x, this.w / 2 - 30), max - this.w / 2 + 30);
+    this.cam.y = Math.min(Math.max(this.cam.y, this.h / 2 - 30), max - this.h / 2 + 30);
+  },
+
+  // Двигаем героя маленькими шажками (не больше 8 точек), чтобы на рывке
+  // он не «проскочил» сквозь тонкую палку. По x и по y — отдельно:
+  // упёрся боком — продолжает скользить вдоль стены.
+  moveHero(mx, my) {
+    const h = this.hero;
+    const steps = Math.max(1, Math.ceil(Math.max(Math.abs(mx), Math.abs(my)) / 8));
+    const sx = mx / steps, sy = my / steps;
+    for (let i = 0; i < steps; i++) {
+      if (sx) {
+        if (World.inWall(h.x + sx, h.y, h.half)) { h.vx = 0; if (Math.abs(h.dx) > 0.3) h.dash = 0; }
+        else h.x += sx;
+      }
+      if (sy) {
+        if (World.inWall(h.x, h.y + sy, h.half)) { h.vy = 0; if (Math.abs(h.dy) > 0.3) h.dash = 0; }
+        else h.y += sy;
+      }
+    }
+  },
+
+  // ---------- Рисуем мир, героя и джойстик ----------
+  drawWorld(ctx) {
+    const h = this.hero;
+    if (!h) return;
+    const cam = { x: Math.round(this.cam.x), y: Math.round(this.cam.y) };
+    World.draw(ctx, cam, this.w, this.h, this.time);
+
+    // Где герой на экране
+    const x = h.x - cam.x + this.w / 2;
+    const y = h.y - cam.y + this.h / 2;
+    const size = h.half * 2;
+
+    // Линии скорости за летящим квадратом (как в ролике): три штриха сзади
+    if (h.dash > 0) {
+      ctx.strokeStyle = '#E3A49C';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      [-10, 0, 10].forEach((o, i) => {
+        const back = size * 0.7 + i * 6;             // откуда начинается штрих
+        const len = 22 + (i === 1 ? 14 : 0);          // средний длиннее
+        const px = -h.dy * o, py = h.dx * o;          // сдвиг поперёк полёта
+        ctx.moveTo(x - h.dx * back + px, y - h.dy * back + py);
+        ctx.lineTo(x - h.dx * (back + len) + px, y - h.dy * (back + len) + py);
+      });
+      ctx.stroke();
+    }
+
+    // Герой: чуть наклоняется по ходу движения — «живой»
+    const p = HEROES[h.kind];
+    const tilt = (h.vx / (p.speed * World.CELL)) * 0.14 + Math.sin(this.time * 2.1) * 0.03;
+    drawSquare(ctx, x, y, size, p.color, tilt);
+
+    // Джойстик: кольцо там, где коснулся, и квадратик, куда ведёшь (по макету)
+    const s = this.stick;
+    if (s.active && !this.paused) {
+      ctx.strokeStyle = COLORS.ink;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(s.ox, s.oy, 44, 0, Math.PI * 2);
+      ctx.stroke();
+      const dx = s.x - s.ox, dy = s.y - s.oy;
+      const len = Math.hypot(dx, dy);
+      const k = len > 32 ? 32 / len : 1; // квадратик не уходит дальше кольца
+      drawSquare(ctx, s.ox + dx * k, s.oy + dy * k, 22, COLORS.ink, 0);
+    }
   },
 };
 
